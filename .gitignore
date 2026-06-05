@@ -8,3 +8,7 @@ sdkconfig.old
 # Common local editor/OS files
 .DS_Store
 Thumbs.db
+
+# Local tooling / IDE metadata
+.clj-kondo/
+.lsp/
