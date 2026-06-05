@@ -9,10 +9,11 @@ O firmware atual segue as diretrizes dos `AGENTS.md`:
   - normalização robusta por hora com `median` e `scale`
   - `EWMA` com `alpha=0.25`
   - `CUSUM` unilateral positivo com `drift=0.75`
-  - `Page-Hinkley` com `delta=0.05`
-  - alarme com `threshold=50.0`
+  - `Page-Hinkley` com `delta=0.5`
+  - `Shewhart` unilateral positivo com `threshold=3.0`
+  - alarmes com os respectivos thresholds de cada baseline
 - privilegia portabilidade embarcada:
-  - estado online mínimo por medidor: `ewma` e `cusum`
+  - estado online mínimo por medidor, compatível com cada baseline
   - atualização por amostra em `O(1)`
   - nenhum buffer/janela longa em RAM
 - salva a saída granular do experimento em `SD card`, para posterior pós-processamento no host
@@ -23,6 +24,8 @@ O firmware atual segue as diretrizes dos `AGENTS.md`:
   Núcleo do detector `EWMA + CUSUM`.
 - `main/page_hinkley_detector.*`
   Núcleo do detector `Page-Hinkley`.
+- `main/shewhart_detector.*`
+  Núcleo do detector `Shewhart`.
 - `main/graphleak_csv_replay.*`
   Leitura simples do `graphleak_volume_experiments.csv` diretamente do `SD card`, agrupando o CSV por cenário.
 - `main/graphleak_stats_loader.*`
@@ -80,10 +83,11 @@ O firmware processa os `60` cenários do CSV e, para cada cenário, executa os t
 - `local_N8_downstream_only`
 - `local_N9_downstream_only`
 
-Para cada medidor local, o firmware hoje executa dois detectores:
+Para cada medidor local, o firmware hoje executa três detectores:
 
 - `ewma_cusum`
 - `page_hinkley`
+- `shewhart`
 
 Assim, a entrada do experimento no `ESP32` passa a ser exatamente a mesma usada no pipeline Python, sem conversão intermediária para um arquivo `.h` gigante.
 
@@ -94,6 +98,7 @@ O firmware grava um arquivo CSV por detector:
 ```text
 /sdcard/ewma_cusum_preds.csv
 /sdcard/page_hinkley_preds.csv
+/sdcard/shewhart_preds.csv
 ```
 
 O objetivo é que o `ESP32` gere apenas a saída granular por amostra. Depois, no host, os mesmos scripts Python da pasta `../python` devem ser usados para derivar:

@@ -7,9 +7,11 @@ idf_component_register(
         "page_hinkley_detector.cpp"
         "prediction_csv_sink.cpp"
         "sdcard_storage.cpp"
+        "shewhart_detector.cpp"
     INCLUDE_DIRS
         "."
     REQUIRES
+        esp_timer
         fatfs
         esp_driver_sdmmc
 )
