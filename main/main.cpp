@@ -8,6 +8,7 @@
 #include "ewma_cusum_detector.h"
 #include "graphleak_csv_replay.h"
 #include "graphleak_stats_loader.h"
+#include "page_hinkley_detector.h"
 #include "prediction_csv_sink.h"
 #include "sdcard_storage.h"
 
@@ -16,8 +17,13 @@ namespace {
 constexpr char kTag[] = "graphleak";
 constexpr char kInputPath[] = "/sdcard/graphleak_volume_experiments.csv";
 constexpr char kStatsPath[] = "/sdcard/graphleak_reference_stats.csv";
-constexpr char kOutputPath[] = "/sdcard/ewma_preds.csv";
-constexpr EwmaCusumConfig kDefaultConfig{};
+constexpr EwmaCusumConfig kEwmaConfig{};
+constexpr PageHinkleyConfig kPageHinkleyConfig{};
+
+enum class DetectorKind : uint8_t {
+    EwmaCusum = 0,
+    PageHinkley = 1,
+};
 
 struct MeterReplayConfig {
     MeterId meter;
@@ -25,10 +31,25 @@ struct MeterReplayConfig {
     const char* column_name;
 };
 
+struct DetectorReplayConfig {
+    DetectorKind kind;
+    const char* detector_name;
+    const char* output_path;
+    float alpha;
+    float drift;
+    float delta;
+    float threshold;
+};
+
 constexpr MeterReplayConfig kMeterConfigs[] = {
     {MeterId::N2, "local_N2", "V_N2"},
     {MeterId::N8, "local_N8_downstream_only", "V_N8"},
     {MeterId::N9, "local_N9_downstream_only", "V_N9"},
+};
+
+constexpr DetectorReplayConfig kDetectorConfigs[] = {
+    {DetectorKind::EwmaCusum, "ewma_cusum", "/sdcard/ewma_cusum_preds.csv", kEwmaConfig.alpha, kEwmaConfig.drift, 0.0f, kEwmaConfig.threshold},
+    {DetectorKind::PageHinkley, "page_hinkley", "/sdcard/page_hinkley_preds.csv", 0.0f, 0.0f, kPageHinkleyConfig.delta, kPageHinkleyConfig.threshold},
 };
 
 struct ReplaySummary {
@@ -73,13 +94,32 @@ uint8_t y_true_for_meter(const ScenarioSample& sample, MeterId meter) {
     }
 }
 
+DetectionStep run_detector_step(
+    DetectorKind kind,
+    EwmaCusumDetector& ewma,
+    PageHinkleyDetector& page_hinkley,
+    float volume,
+    uint8_t hour)
+{
+    switch (kind) {
+        case DetectorKind::EwmaCusum:
+            return ewma.update(volume, hour);
+        case DetectorKind::PageHinkley:
+            return page_hinkley.update(volume, hour);
+        default:
+            return ewma.update(volume, hour);
+    }
+}
+
 ReplaySummary run_meter_replay(
     const ScenarioBuffer& scenario,
+    const DetectorReplayConfig& detector_config,
     const MeterReplayConfig& meter_config,
     const GraphLeakStatsSet& stats_set,
     PredictionCsvSink& sink)
 {
-    EwmaCusumDetector detector(stats_set.for_meter(meter_config.meter), kDefaultConfig);
+    EwmaCusumDetector ewma(stats_set.for_meter(meter_config.meter), kEwmaConfig);
+    PageHinkleyDetector page_hinkley(stats_set.for_meter(meter_config.meter), kPageHinkleyConfig);
     ReplaySummary summary;
     summary.sample_count = scenario.samples.size();
 
@@ -89,7 +129,8 @@ ReplaySummary run_meter_replay(
 
     ESP_LOGI(
         kTag,
-        "Running scenario_id=%u meter=%s type=%s samples=%u",
+        "Running detector=%s scenario_id=%u meter=%s type=%s samples=%u",
+        detector_config.detector_name,
         scenario.scenario_id,
         meter,
         scenario.scenario_type.c_str(),
@@ -97,14 +138,20 @@ ReplaySummary run_meter_replay(
 
     for (const ScenarioSample& sample : scenario.samples) {
         const uint8_t y_true = y_true_for_meter(sample, meter_config.meter);
-        const DetectionStep step = detector.update(volume_for_meter(sample, meter_config.meter), sample.hour);
+        const DetectionStep step = run_detector_step(
+            detector_config.kind,
+            ewma,
+            page_hinkley,
+            volume_for_meter(sample, meter_config.meter),
+            sample.hour);
 
         PredictionRecord record;
         record.config = meter_config.config_name;
         record.cols = meter_config.column_name;
-        record.alpha = kDefaultConfig.alpha;
-        record.drift = kDefaultConfig.drift;
-        record.threshold = kDefaultConfig.threshold;
+        record.alpha = detector_config.alpha;
+        record.drift = detector_config.drift;
+        record.delta = detector_config.delta;
+        record.threshold = detector_config.threshold;
         record.group_col = "hour";
         record.meter = meter;
         record.scenario_id = scenario.scenario_id;
@@ -115,10 +162,15 @@ ReplaySummary run_meter_replay(
         record.hour = sample.hour;
         record.y_true = y_true;
         record.y_pred = static_cast<uint8_t>(step.alarm ? 1U : 0U);
-        record.score = step.cusum;
+        record.score = step.score;
 
         if (!sink.write_row(record)) {
-            ESP_LOGE(kTag, "Failed to write prediction row for scenario_id=%u meter=%s", scenario.scenario_id, meter);
+            ESP_LOGE(
+                kTag,
+                "Failed to write prediction row for detector=%s scenario_id=%u meter=%s",
+                detector_config.detector_name,
+                scenario.scenario_id,
+                meter);
         }
 
         if (y_true == 1U && !seen_onset) {
@@ -150,8 +202,8 @@ ReplaySummary run_meter_replay(
             }
         }
 
-        if (step.cusum > summary.max_score) {
-            summary.max_score = step.cusum;
+        if (step.score > summary.max_score) {
+            summary.max_score = step.score;
         }
     }
 
@@ -161,13 +213,15 @@ ReplaySummary run_meter_replay(
 
 void log_summary(
     const ScenarioBuffer& scenario,
+    const DetectorReplayConfig& detector_config,
     const MeterReplayConfig& meter_config,
     const ReplaySummary& summary)
 {
     ESP_LOGI(
         kTag,
-        "Summary scenario_id=%u meter=%s: samples=%u tp=%u fp=%u fn=%u tn=%u detected_any=%u "
+        "Summary detector=%s scenario_id=%u meter=%s: samples=%u tp=%u fp=%u fn=%u tn=%u detected_any=%u "
         "valid=%u clean=%u first_alert=%ld first_valid=%ld delay_min=%d fp_before_onset=%u max_score=%.3f",
+        detector_config.detector_name,
         scenario.scenario_id,
         meter_name(meter_config.meter),
         static_cast<unsigned>(summary.sample_count),
@@ -185,7 +239,11 @@ void log_summary(
         summary.max_score);
 }
 
-bool run_all_replays_from_csv(const GraphLeakStatsSet& stats_set, PredictionCsvSink& sink) {
+bool run_detector_replays_from_csv(
+    const GraphLeakStatsSet& stats_set,
+    const DetectorReplayConfig& detector_config,
+    PredictionCsvSink& sink)
+{
     size_t scenario_count = 0;
 
     const bool ok = for_each_graphleak_scenario_csv(
@@ -193,8 +251,13 @@ bool run_all_replays_from_csv(const GraphLeakStatsSet& stats_set, PredictionCsvS
         [&](const ScenarioBuffer& scenario) {
             ++scenario_count;
             for (const MeterReplayConfig& meter_config : kMeterConfigs) {
-                const ReplaySummary summary = run_meter_replay(scenario, meter_config, stats_set, sink);
-                log_summary(scenario, meter_config, summary);
+                const ReplaySummary summary = run_meter_replay(
+                    scenario,
+                    detector_config,
+                    meter_config,
+                    stats_set,
+                    sink);
+                log_summary(scenario, detector_config, meter_config, summary);
             }
             return true;
         });
@@ -205,7 +268,8 @@ bool run_all_replays_from_csv(const GraphLeakStatsSet& stats_set, PredictionCsvS
 
     ESP_LOGI(
         kTag,
-        "Finished CSV replay for %u scenarios and %u meter configurations",
+        "Finished CSV replay for detector=%s across %u scenarios and %u meter configurations",
+        detector_config.detector_name,
         static_cast<unsigned>(scenario_count),
         static_cast<unsigned>(sizeof(kMeterConfigs) / sizeof(kMeterConfigs[0])));
     return true;
@@ -215,7 +279,7 @@ bool run_all_replays_from_csv(const GraphLeakStatsSet& stats_set, PredictionCsvS
 
 extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(1500));
-    ESP_LOGI(kTag, "GraphLeak local EWMA+CUSUM detector starting on ESP32-S3");
+    ESP_LOGI(kTag, "GraphLeak detector replay starting on ESP32-S3");
 
     if (!init_sdcard_storage()) {
         ESP_LOGE(kTag, "Replay aborted: SD card init failed.");
@@ -228,19 +292,31 @@ extern "C" void app_main(void) {
         return;
     }
 
-    PredictionCsvSink sink;
-    if (!sink.open(kOutputPath) || !sink.write_header()) {
-        ESP_LOGE(kTag, "Replay aborted: could not open CSV output at %s", kOutputPath);
-        return;
-    }
+    for (const DetectorReplayConfig& detector_config : kDetectorConfigs) {
+        PredictionCsvSink sink;
+        if (!sink.open(detector_config.output_path) || !sink.write_header()) {
+            ESP_LOGE(kTag, "Replay aborted: could not open CSV output at %s", detector_config.output_path);
+            return;
+        }
 
-    if (!run_all_replays_from_csv(stats_set, sink)) {
+        if (!run_detector_replays_from_csv(stats_set, detector_config, sink)) {
+            sink.close();
+            ESP_LOGE(
+                kTag,
+                "Replay aborted: could not process input CSV at %s for detector=%s",
+                kInputPath,
+                detector_config.detector_name);
+            return;
+        }
+
         sink.close();
-        ESP_LOGE(kTag, "Replay aborted: could not process input CSV at %s", kInputPath);
-        return;
+        ESP_LOGI(
+            kTag,
+            "Replay finished for detector=%s. Input=%s Stats=%s Output=%s",
+            detector_config.detector_name,
+            kInputPath,
+            kStatsPath,
+            detector_config.output_path);
     }
-
-    sink.close();
-    ESP_LOGI(kTag, "Replay finished. Input=%s Stats=%s Output=%s", kInputPath, kStatsPath, kOutputPath);
     ESP_LOGI(kTag, "Device is idle.");
 }

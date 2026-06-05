@@ -19,7 +19,7 @@ bool PredictionCsvSink::write_header() {
 
     return std::fprintf(
                file_,
-               "config,cols,alpha,drift,threshold,group_col,meter,scenario_id,"
+               "config,cols,alpha,drift,delta,threshold,group_col,meter,scenario_id,"
                "source_file,scenario_type,time_s,hour,last_label,y_true,y_pred,score\n") > 0;
 }
 
@@ -30,11 +30,12 @@ bool PredictionCsvSink::write_row(const PredictionRecord& record) {
 
     return std::fprintf(
                file_,
-               "%s,%s,%.2f,%.2f,%.1f,%s,%s,%" PRIu16 ",%s,%s,%" PRIu32 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%.6f\n",
+               "%s,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%" PRIu16 ",%s,%s,%" PRIu32 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%.6f\n",
                record.config,
                record.cols,
                static_cast<double>(record.alpha),
                static_cast<double>(record.drift),
+               static_cast<double>(record.delta),
                static_cast<double>(record.threshold),
                record.group_col,
                record.meter,

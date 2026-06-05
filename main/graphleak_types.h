@@ -14,6 +14,14 @@ struct HourlyRobustStats {
     std::array<float, 24> scale{};
 };
 
+struct DetectionStep {
+    float z_score = 0.0f;
+    float state_primary = 0.0f;
+    float state_secondary = 0.0f;
+    float score = 0.0f;
+    bool alarm = false;
+};
+
 inline const char* meter_name(MeterId meter) {
     switch (meter) {
         case MeterId::N2:

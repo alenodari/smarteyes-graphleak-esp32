@@ -10,13 +10,6 @@ struct EwmaCusumConfig {
     float threshold = 50.0f;
 };
 
-struct DetectionStep {
-    float z_score = 0.0f;
-    float ewma = 0.0f;
-    float cusum = 0.0f;
-    bool alarm = false;
-};
-
 class EwmaCusumDetector {
 public:
     EwmaCusumDetector(const HourlyRobustStats& stats, EwmaCusumConfig config = {});

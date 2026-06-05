@@ -1,14 +1,15 @@
-# GraphLeak EWMA+CUSUM no ESP32-S3
+# GraphLeak Detectors no ESP32-S3
 
-Este projeto porta para `C++/ESP-IDF` o baseline local `EWMA + CUSUM` da pasta `../python`.
+Este projeto porta para `C++/ESP-IDF` detectores locais da pasta `../python`.
 
 O firmware atual segue as diretrizes dos `AGENTS.md`:
 
 - usa apenas a série temporal local de volume por medidor
-- preserva a lógica do baseline Python:
+- preserva a lógica dos baselines Python:
   - normalização robusta por hora com `median` e `scale`
   - `EWMA` com `alpha=0.25`
   - `CUSUM` unilateral positivo com `drift=0.75`
+  - `Page-Hinkley` com `delta=0.05`
   - alarme com `threshold=50.0`
 - privilegia portabilidade embarcada:
   - estado online mínimo por medidor: `ewma` e `cusum`
@@ -19,7 +20,9 @@ O firmware atual segue as diretrizes dos `AGENTS.md`:
 ## Estrutura
 
 - `main/ewma_cusum_detector.*`
-  Núcleo do detector online.
+  Núcleo do detector `EWMA + CUSUM`.
+- `main/page_hinkley_detector.*`
+  Núcleo do detector `Page-Hinkley`.
 - `main/graphleak_csv_replay.*`
   Leitura simples do `graphleak_volume_experiments.csv` diretamente do `SD card`, agrupando o CSV por cenário.
 - `main/graphleak_stats_loader.*`
@@ -71,20 +74,26 @@ O arquivo esperado é o derivado da pasta `../python` e deve conter, no mínimo,
 - `leak_downstream_N8`
 - `leak_downstream_N9`
 
-O firmware processa os `60` cenários do CSV e, para cada cenário, executa os três detectores locais atuais:
+O firmware processa os `60` cenários do CSV e, para cada cenário, executa os três medidores locais atuais:
 
 - `local_N2`
 - `local_N8_downstream_only`
 - `local_N9_downstream_only`
 
+Para cada medidor local, o firmware hoje executa dois detectores:
+
+- `ewma_cusum`
+- `page_hinkley`
+
 Assim, a entrada do experimento no `ESP32` passa a ser exatamente a mesma usada no pipeline Python, sem conversão intermediária para um arquivo `.h` gigante.
 
 ## Saída do experimento
 
-O firmware grava um arquivo CSV em:
+O firmware grava um arquivo CSV por detector:
 
 ```text
-/sdcard/ewma_preds.csv
+/sdcard/ewma_cusum_preds.csv
+/sdcard/page_hinkley_preds.csv
 ```
 
 O objetivo é que o `ESP32` gere apenas a saída granular por amostra. Depois, no host, os mesmos scripts Python da pasta `../python` devem ser usados para derivar:

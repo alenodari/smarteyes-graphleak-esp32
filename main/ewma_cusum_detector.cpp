@@ -21,8 +21,9 @@ DetectionStep EwmaCusumDetector::update(float volume, uint8_t hour) {
 
     DetectionStep step;
     step.z_score = z_score;
-    step.ewma = ewma_;
-    step.cusum = cusum_;
+    step.state_primary = ewma_;
+    step.state_secondary = cusum_;
+    step.score = cusum_;
     step.alarm = cusum_ > config_.threshold;
     return step;
 }

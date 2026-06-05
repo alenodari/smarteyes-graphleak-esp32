@@ -4,6 +4,7 @@ idf_component_register(
         "ewma_cusum_detector.cpp"
         "graphleak_csv_replay.cpp"
         "graphleak_stats_loader.cpp"
+        "page_hinkley_detector.cpp"
         "prediction_csv_sink.cpp"
         "sdcard_storage.cpp"
     INCLUDE_DIRS

@@ -8,6 +8,7 @@ struct PredictionRecord {
     const char* cols = nullptr;
     float alpha = 0.0f;
     float drift = 0.0f;
+    float delta = 0.0f;
     float threshold = 0.0f;
     const char* group_col = nullptr;
     const char* meter = nullptr;
